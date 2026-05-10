@@ -165,6 +165,73 @@ canvas { display: block; cursor: crosshair; }
 
 #joinBtn:hover { background: #3a7dc7; }
 
+#joinBtn:disabled {
+  background: #9bbce8;
+  cursor: not-allowed;
+}
+
+#joinBtn:disabled:hover { background: #9bbce8; }
+
+.auth-loading {
+  text-align: center;
+  font-size: 14px;
+  color: #555;
+  padding: 8px 4px;
+}
+
+.auth-error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.secondary-btn {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 14px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #f8f8f8;
+  color: #333;
+  cursor: pointer;
+}
+
+.secondary-btn:hover {
+  background: #eee;
+}
+
+.alp-account-row {
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.alp-account-row strong { font-weight: 700; }
+
+.alp-account-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.92;
+}
+
+#guestNameRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#guestNameLabel {
+  font-size: 13px;
+  color: #555;
+  font-weight: 600;
+}
+
 #hud kbd {
   display: inline-block;
   padding: 1px 6px;

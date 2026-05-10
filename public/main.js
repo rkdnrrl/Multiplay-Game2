@@ -266,6 +266,7 @@ const socket = io({ path: '/multiplay-game2/socket.io' });
 const urlParams = new URLSearchParams(window.location.search);
 const urlAlpToken = urlParams.get('token');
 let joinToken = urlAlpToken || null;
+const platformApi = window.__ALP_PLATFORM_API__ || '';
 
 const overlay = document.getElementById('overlay');
 const hud = document.getElementById('hud');
@@ -279,6 +280,12 @@ const serverCapacityRow = document.getElementById('serverCapacityRow');
 const serverCapacityCurrentEl = document.getElementById('serverCapacityCurrent');
 const serverCapacityMaxEl = document.getElementById('serverCapacityMax');
 const serverCapacityBreakdownEl = document.getElementById('serverCapacityBreakdown');
+const authLoading = document.getElementById('authLoading');
+const authError = document.getElementById('authError');
+const guestFallbackBtn = document.getElementById('guestFallbackBtn');
+const alpAccountRow = document.getElementById('alpAccountRow');
+const guestNameRow = document.getElementById('guestNameRow');
+const alpNicknameEl = document.getElementById('alpNickname');
 
 /** WASD 이동 입력 (월드 XZ: W/S = ±Z, A/D = ±X) */
 const keyMove = { w: false, a: false, s: false, d: false };
@@ -323,9 +330,15 @@ window.addEventListener('blur', () => {
 });
 
 let joined = false;
+let lobbyJoinAuthBlocked = false;
 let lobbyPingIntervalId = null;
 let lobbyServerFull = false;
 let lastServerCapacity = { current: 0, max: 100, inGame: 0, inLobby: 0 };
+
+function setLobbyAuthBlocked(on) {
+  lobbyJoinAuthBlocked = !!on;
+  refreshLobbyJoinButton();
+}
 
 function stopLobbyPing() {
   if (lobbyPingIntervalId != null) {
@@ -349,7 +362,8 @@ function startLobbyPing() {
 
 function refreshLobbyJoinButton() {
   if (!joinBtn) return;
-  joinBtn.disabled = lobbyServerFull;
+  const blocked = lobbyJoinAuthBlocked || lobbyServerFull;
+  joinBtn.disabled = blocked;
   joinBtn.textContent = lobbyServerFull ? '서버 정원 초과' : '입장';
 }
 
@@ -407,6 +421,93 @@ if (roomInput) {
   roomInput.value = urlParams.get('room') || 'lobby';
 }
 
+function applyGuestPlayUi() {
+  joinToken = null;
+  authError?.classList.add('hidden');
+  guestFallbackBtn?.classList.add('hidden');
+  alpAccountRow?.classList.add('hidden');
+  guestNameRow?.classList.remove('hidden');
+  if (nameInput) {
+    nameInput.readOnly = false;
+    nameInput.value = '';
+  }
+}
+
+function initNoTokenGuestUi() {
+  authLoading?.classList.add('hidden');
+  authError?.classList.add('hidden');
+  guestFallbackBtn?.classList.add('hidden');
+  alpAccountRow?.classList.add('hidden');
+  guestNameRow?.classList.remove('hidden');
+  joinToken = null;
+  setLobbyAuthBlocked(false);
+}
+
+function initAuthUi() {
+  if (!urlAlpToken) {
+    initNoTokenGuestUi();
+    nameInput?.focus();
+    return;
+  }
+
+  if (!platformApi) {
+    authLoading?.classList.add('hidden');
+    if (authError) {
+      authError.textContent = '플랫폼 연동 설정이 없어 로그인 확인을 할 수 없습니다. 게스트 닉네임으로 플레이해 주세요.';
+      authError.classList.remove('hidden');
+    }
+    applyGuestPlayUi();
+    setLobbyAuthBlocked(false);
+    nameInput?.focus();
+    return;
+  }
+
+  joinToken = urlAlpToken;
+  guestNameRow?.classList.add('hidden');
+  alpAccountRow?.classList.add('hidden');
+  authError?.classList.add('hidden');
+  guestFallbackBtn?.classList.add('hidden');
+  authLoading?.classList.remove('hidden');
+  setLobbyAuthBlocked(true);
+
+  fetch(`${platformApi}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${urlAlpToken}` },
+  })
+    .then((r) => {
+      if (!r.ok) throw new Error('verify');
+      return r.json();
+    })
+    .then((data) => {
+      const nick = data?.user?.nickname;
+      if (!nick) throw new Error('no-nick');
+      if (alpNicknameEl) alpNicknameEl.textContent = nick;
+      alpAccountRow?.classList.remove('hidden');
+      authError?.classList.add('hidden');
+      guestFallbackBtn?.classList.add('hidden');
+      joinToken = urlAlpToken;
+      roomInput?.focus();
+    })
+    .catch(() => {
+      if (authError) {
+        authError.textContent = '계정 정보를 불러오지 못했습니다. 입장 시 서버에서 로그인을 다시 확인합니다. 게스트로 플레이하려면 아래 버튼을 누르세요.';
+        authError.classList.remove('hidden');
+      }
+      guestFallbackBtn?.classList.remove('hidden');
+      alpAccountRow?.classList.add('hidden');
+      guestNameRow?.classList.add('hidden');
+      joinToken = urlAlpToken;
+    })
+    .finally(() => {
+      authLoading?.classList.add('hidden');
+      setLobbyAuthBlocked(false);
+    });
+}
+
+guestFallbackBtn?.addEventListener('click', () => {
+  applyGuestPlayUi();
+  nameInput?.focus();
+});
+
 const CLASS_STORAGE_KEY = 'mg2_classId';
 const savedClass = sessionStorage.getItem(CLASS_STORAGE_KEY);
 if (classSelect && savedClass && [...classSelect.options].some((o) => o.value === savedClass)) {
@@ -423,8 +524,7 @@ function join() {
   const classId = selectedClassId();
 
   if (joinToken) {
-    const name = nameInput?.value.trim() || '';
-    socket.emit('join', { name, sessionId, token: joinToken, classId });
+    socket.emit('join', { name: '', sessionId, token: joinToken, classId });
     return;
   }
 
@@ -444,7 +544,8 @@ nameInput.addEventListener('keydown', (e) => {
 roomInput?.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') join();
 });
-nameInput.focus();
+
+initAuthUi();
 
 socket.on('connect', () => {
   if (!joined) startLobbyPing();
@@ -467,6 +568,11 @@ socket.on('join-error', ({ message }) => {
   joined = false;
   hideGameOverUI();
   alert(message || '방 입장에 실패했습니다.');
+  if (message && /로그인|세션|만료|ALP/i.test(message) && urlAlpToken) {
+    applyGuestPlayUi();
+    setLobbyAuthBlocked(false);
+    nameInput?.focus();
+  }
 });
 
 socket.on('init', ({ id, players: list, core, enemies, gameOver }) => {

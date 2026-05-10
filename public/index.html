@@ -18,7 +18,17 @@
         </div>
         <div id="serverCapacityBreakdown" class="server-capacity-breakdown">게임 중 — · 입장 대기 —</div>
       </div>
-      <input id="nameInput" placeholder="닉네임을 입력하세요" maxlength="20" autocomplete="off">
+      <div id="authLoading" class="hidden auth-loading">로그인 정보 확인 중…</div>
+      <div id="authError" class="hidden auth-error"></div>
+      <button type="button" id="guestFallbackBtn" class="hidden secondary-btn">게스트로 입장 (닉네임 직접 입력)</button>
+      <div id="alpAccountRow" class="hidden alp-account-row">
+        <div>로그인 계정: <strong id="alpNickname"></strong></div>
+        <div class="alp-account-hint">게임에서는 위 닉네임으로 표시됩니다.</div>
+      </div>
+      <div id="guestNameRow">
+        <label id="guestNameLabel" for="nameInput">닉네임 (게스트)</label>
+        <input id="nameInput" placeholder="플레이할 닉네임을 입력하세요" maxlength="20" autocomplete="off">
+      </div>
       <label class="field-label" for="classSelect">클래스</label>
       <select id="classSelect" aria-label="클래스 선택">
         <option value="attack">공격</option>
