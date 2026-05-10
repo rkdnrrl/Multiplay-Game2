@@ -72,10 +72,12 @@ const cubeGeo = new THREE.BoxGeometry(1, 1, 1);
 const coreCylinderGeo = new THREE.CylinderGeometry(0.52, 0.62, 1.12, 12);
 const coreRingGeo = new THREE.RingGeometry(1.6, 2.35, 48);
 const ENEMY_VIS_RADIUS = 0.35;
-const enemySphereGeo = new THREE.SphereGeometry(ENEMY_VIS_RADIUS, 14, 14);
+const BULLET_VIS_RADIUS = 0.14;
+const bulletSphereGeo = new THREE.SphereGeometry(BULLET_VIS_RADIUS, 10, 10);
 
 const players = {};
 const enemyEntities = {};
+const bulletEntities = {};
 let coreEntity = null;
 let myId = null;
 let gameEnded = false;
@@ -83,6 +85,12 @@ let gameEnded = false;
 const MOVE_SPEED = 10;
 const BOUND = 24;
 const SEND_INTERVAL_MS = 50;
+/** 서버와 동일한 기본값 (패킷에 없을 때) */
+const ENEMY_DEFAULT_MAX_HP = 50;
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const planeForShot = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
 function destroyEntity(entity) {
   if (!entity) return;
@@ -101,14 +109,131 @@ function clearEntityMap(map) {
 
 function destroyEnemyEntry(ent) {
   if (!ent) return;
+  if (ent.hpLabel) {
+    if (ent.hpLabel.element?.parentNode) ent.hpLabel.element.remove();
+    if (ent.hpLabel.parent) ent.hpLabel.parent.remove(ent.hpLabel);
+  }
   if (ent.mesh?.parent) ent.mesh.parent.remove(ent.mesh);
-  if (ent.mesh?.material) ent.mesh.material.dispose();
+  if (ent.skinMat) ent.skinMat.dispose();
+  if (ent.headMat) ent.headMat.dispose();
+  ent.mesh?.traverse((child) => {
+    if (child.geometry) child.geometry.dispose();
+  });
+}
+
+function hashStringToPhase(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (h % 1000) / 1000;
+}
+
+function buildZombieEnemyGroup() {
+  const Z = 1.68;
+  const group = new THREE.Group();
+  const skinMat = new THREE.MeshLambertMaterial({
+    color: 0x6c7565,
+    emissive: 0x1a2210,
+    emissiveIntensity: 0.2,
+  });
+  const headMat = new THREE.MeshLambertMaterial({
+    color: 0x5f6a58,
+    emissive: 0x141a10,
+    emissiveIntensity: 0.16,
+  });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2 * Z, 0.5 * Z, 4, 10), skinMat);
+  body.position.y = 0.35 * Z;
+  body.rotation.z = 0.05;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16 * Z, 10, 10), headMat);
+  head.position.set(0.04 * Z, 0.75 * Z, -0.03 * Z);
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.1 * Z, 0.32 * Z, 0.1 * Z), skinMat);
+  armL.position.set(-0.28 * Z, 0.45 * Z, 0.02 * Z);
+  armL.rotation.z = 0.45;
+  const armR = new THREE.Mesh(new THREE.BoxGeometry(0.1 * Z, 0.3 * Z, 0.1 * Z), skinMat);
+  armR.position.set(0.26 * Z, 0.42 * Z, 0);
+  armR.rotation.z = -0.35;
+  group.add(body, head, armL, armR);
+  return { group, skinMat, headMat, scale: Z };
+}
+
+function updateEnemyVisual(ent, hp, maxHp) {
+  const max = maxHp > 0 ? maxHp : ENEMY_DEFAULT_MAX_HP;
+  const h = typeof hp === 'number' ? hp : max;
+  const ratio = Math.max(0, Math.min(1, h / max));
+  const fresh = new THREE.Color(0x6e7a6a);
+  const hurt = new THREE.Color(0x3d2a2d);
+  const cSkin = fresh.clone().lerp(hurt, 1 - ratio);
+  if (ent.skinMat) ent.skinMat.color.copy(cSkin);
+  if (ent.headMat) ent.headMat.color.copy(cSkin).multiplyScalar(0.88);
+
+  if (!ent.hpLabel) {
+    const div = document.createElement('div');
+    div.className = 'enemy-hp-tag';
+    ent.hpLabel = new CSS2DObject(div);
+    const lift = (ent.zombieScale ?? 1.68) * 1.12;
+    ent.hpLabel.position.set(0, lift, 0);
+    ent.mesh.add(ent.hpLabel);
+  }
+  ent.hpLabel.element.textContent = `${Math.max(0, Math.ceil(h))}`;
 }
 
 function clearAllEnemies() {
   Object.keys(enemyEntities).forEach((id) => {
     destroyEnemyEntry(enemyEntities[id]);
     delete enemyEntities[id];
+  });
+}
+
+function destroyBulletEntry(ent) {
+  if (!ent) return;
+  if (ent.mesh?.parent) ent.mesh.parent.remove(ent.mesh);
+  if (ent.mesh?.material) ent.mesh.material.dispose();
+}
+
+function clearAllBullets() {
+  Object.keys(bulletEntities).forEach((id) => {
+    destroyBulletEntry(bulletEntities[id]);
+    delete bulletEntities[id];
+  });
+}
+
+function syncBullets(next) {
+  if (!next || typeof next !== 'object') return;
+  const keep = new Set(Object.keys(next));
+  Object.keys(bulletEntities).forEach((id) => {
+    if (!keep.has(id)) {
+      destroyBulletEntry(bulletEntities[id]);
+      delete bulletEntities[id];
+    }
+  });
+  Object.values(next).forEach((b) => {
+    if (!b || typeof b.id !== 'string') return;
+    const ty = b.y ?? BULLET_VIS_RADIUS + 0.12;
+    let ent = bulletEntities[b.id];
+    const vx = typeof b.vx === 'number' ? b.vx : 0;
+    const vz = typeof b.vz === 'number' ? b.vz : 0;
+    if (!ent) {
+      const mesh = new THREE.Mesh(
+        bulletSphereGeo,
+        new THREE.MeshBasicMaterial({ color: 0xffeb7a })
+      );
+      mesh.position.set(b.x, ty, b.z);
+      mesh.rotation.y = Math.atan2(vx, vz);
+      scene.add(mesh);
+      ent = {
+        mesh,
+        vx,
+        vz,
+        ty,
+        targetPosition: new THREE.Vector3(b.x, ty, b.z),
+      };
+      bulletEntities[b.id] = ent;
+    } else {
+      ent.vx = vx;
+      ent.vz = vz;
+      ent.ty = ty;
+      ent.targetPosition.set(b.x, ty, b.z);
+      ent.mesh.rotation.y = Math.atan2(vx, vz);
+    }
   });
 }
 
@@ -191,20 +316,28 @@ function syncEnemies(next) {
     const ty = e.y ?? ENEMY_VIS_RADIUS;
     let ent = enemyEntities[e.id];
     if (!ent) {
-      const mesh = new THREE.Mesh(
-        enemySphereGeo,
-        new THREE.MeshLambertMaterial({ color: 0xc0392b })
-      );
-      mesh.position.set(e.x, ty, e.z);
-      scene.add(mesh);
+      const { group, skinMat, headMat, scale: zombieScale } = buildZombieEnemyGroup();
+      group.userData.enemyId = e.id;
+      group.userData.isEnemy = true;
+      group.position.set(e.x, ty, e.z);
+      scene.add(group);
       ent = {
-        mesh,
+        mesh: group,
+        skinMat,
+        headMat,
+        zombieScale,
+        hpLabel: null,
+        bobPhase: hashStringToPhase(e.id) * Math.PI * 2,
         targetPosition: new THREE.Vector3(e.x, ty, e.z),
       };
       enemyEntities[e.id] = ent;
     } else {
+      ent.mesh.userData.enemyId = e.id;
       ent.targetPosition.set(e.x, ty, e.z);
     }
+    const hp = typeof e.hp === 'number' ? e.hp : ENEMY_DEFAULT_MAX_HP;
+    const maxHp = typeof e.maxHp === 'number' ? e.maxHp : ENEMY_DEFAULT_MAX_HP;
+    updateEnemyVisual(ent, hp, maxHp);
   });
 }
 
@@ -214,6 +347,14 @@ function showGameOverUI() {
 
 function hideGameOverUI() {
   document.getElementById('gameOverOverlay')?.classList.add('hidden');
+}
+
+function updateAttackClassHint() {
+  const el = document.getElementById('attackClassHint');
+  if (!el) return;
+  const local = myId && players[myId];
+  const show = !!(joined && !gameEnded && local && local.data.classId === 'attack');
+  el.classList.toggle('hidden', !show);
 }
 
 function createPlayer(p) {
@@ -261,7 +402,12 @@ function removePlayer(id) {
   delete players[id];
 }
 
-const socket = io({ path: '/multiplay-game2/socket.io' });
+/** Express에서 같은 호스트로 제공될 때 로컬(http://localhost:PORT/)에서도 동작 */
+const SOCKET_IO_PATH = '/multiplay-game2/socket.io';
+const socket = io({
+  path: SOCKET_IO_PATH,
+  transports: ['websocket', 'polling'],
+});
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlAlpToken = urlParams.get('token');
@@ -548,11 +694,22 @@ roomInput?.addEventListener('keydown', (e) => {
 initAuthUi();
 
 socket.on('connect', () => {
+  if (serverCapacityBreakdownEl && serverCapacityBreakdownEl.dataset.socketErr === '1') {
+    serverCapacityBreakdownEl.removeAttribute('data-socket-err');
+    updateServerCapacityDisplay(lastServerCapacity);
+  }
   if (!joined) startLobbyPing();
 });
 if (socket.connected) {
   startLobbyPing();
 }
+
+socket.on('connect_error', () => {
+  if (!serverCapacityBreakdownEl) return;
+  serverCapacityBreakdownEl.dataset.socketErr = '1';
+  serverCapacityBreakdownEl.textContent =
+    '연결 실패 · 프로젝트 폴더에서 npm start 후 http://localhost:3002 로 접속했는지 확인하세요.';
+});
 
 socket.on('server-capacity', (payload) => {
   if (!payload || typeof payload !== 'object') return;
@@ -575,7 +732,7 @@ socket.on('join-error', ({ message }) => {
   }
 });
 
-socket.on('init', ({ id, players: list, core, enemies, gameOver }) => {
+socket.on('init', ({ id, players: list, core, enemies, bullets, gameOver }) => {
   joined = true;
   stopLobbyPing();
   sessionStorage.setItem(CLASS_STORAGE_KEY, selectedClassId());
@@ -583,21 +740,25 @@ socket.on('init', ({ id, players: list, core, enemies, gameOver }) => {
   hud.classList.remove('hidden');
   clearEntityMap(players);
   clearAllEnemies();
+  clearAllBullets();
   destroyCoreEntity();
   gameEnded = !!gameOver;
   myId = id;
   Object.values(list).forEach(createPlayer);
   if (core) ensureCore(core);
   if (enemies) syncEnemies(enemies);
+  syncBullets(bullets || {});
   if (gameEnded) showGameOverUI();
   else hideGameOverUI();
   snapCameraToLocalPlayer();
+  updateAttackClassHint();
 });
 
-socket.on('world-state', ({ enemies, core }) => {
+socket.on('world-state', ({ enemies, core, bullets }) => {
   if (!joined || gameEnded) return;
   if (core && typeof core.hp === 'number') updateCoreHud(core.hp, core.maxHp);
   if (enemies) syncEnemies(enemies);
+  if (bullets) syncBullets(bullets);
 });
 
 socket.on('core-update', ({ hp, maxHp }) => {
@@ -608,17 +769,22 @@ socket.on('core-update', ({ hp, maxHp }) => {
 socket.on('game-over', () => {
   gameEnded = true;
   keyMove.w = keyMove.a = keyMove.s = keyMove.d = false;
+  clearAllBullets();
   showGameOverUI();
+  updateAttackClassHint();
 });
 
-socket.on('battle-reset', ({ core, enemies }) => {
+socket.on('battle-reset', ({ core, enemies, bullets }) => {
   gameEnded = false;
   hideGameOverUI();
   clearAllEnemies();
+  clearAllBullets();
   destroyCoreEntity();
   if (core) ensureCore(core);
   syncEnemies(enemies || {});
+  syncBullets(bullets || {});
   snapCameraToLocalPlayer();
+  updateAttackClassHint();
 });
 
 socket.on('player-joined', createPlayer);
@@ -645,11 +811,32 @@ window.addEventListener('resize', () => {
   labelRenderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (overlay && !overlay.classList.contains('hidden')) return;
+  if (!joined || gameEnded) return;
+  const local = players[myId];
+  if (!local || local.data.classId !== 'attack') return;
+
+  pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hitPoint = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(planeForShot, hitPoint)) return;
+  let tx = hitPoint.x;
+  let tz = hitPoint.z;
+  tx = Math.max(-BOUND, Math.min(BOUND, tx));
+  tz = Math.max(-BOUND, Math.min(BOUND, tz));
+  socket.emit('shoot', { tx, tz });
+});
+
 let lastTime = performance.now();
 let lastSent = 0;
 const REMOTE_SMOOTHING = 14;
 /** 서버 틱 사이 보간 — 적 구체가 덜 덜덜 끊기게 */
 const ENEMY_SMOOTHING = 26;
+/** 총알: 서버 vx/vz로 매 프레임 적분 → 부드러운 비행, 서버 좌표는 약하게만 보정 */
+const BULLET_RECONCILE = 22;
+const BULLET_SERVER_PULL = 0.16;
 
 function emitMyPosition(me) {
   const pos = me.mesh.position;
@@ -669,10 +856,26 @@ function animate() {
   lastTime = now;
   const remoteAlpha = 1 - Math.exp(-REMOTE_SMOOTHING * dt);
   const enemyAlpha = 1 - Math.exp(-ENEMY_SMOOTHING * dt);
+  const bulletPull = 1 - Math.exp(-BULLET_RECONCILE * dt);
   const camAlpha = 1 - Math.exp(-CAMERA_FOLLOW_SMOOTHING * dt);
 
   Object.values(enemyEntities).forEach((ent) => {
     ent.mesh.position.lerp(ent.targetPosition, enemyAlpha);
+    const phase = ent.bobPhase ?? 0;
+    const zs = ent.zombieScale ?? 1.68;
+    const bob = Math.sin(now * 0.004 + phase) * 0.055 * zs;
+    const sway = Math.sin(now * 0.0033 + phase * 1.7) * 0.08 * zs;
+    ent.mesh.position.y = ent.targetPosition.y + bob;
+    ent.mesh.rotation.z = sway;
+  });
+
+  Object.values(bulletEntities).forEach((ent) => {
+    const ty = ent.ty ?? BULLET_VIS_RADIUS + 0.12;
+    ent.mesh.position.x += ent.vx * dt;
+    ent.mesh.position.z += ent.vz * dt;
+    ent.mesh.position.y = ty;
+    ent.mesh.position.x += (ent.targetPosition.x - ent.mesh.position.x) * bulletPull * BULLET_SERVER_PULL;
+    ent.mesh.position.z += (ent.targetPosition.z - ent.mesh.position.z) * bulletPull * BULLET_SERVER_PULL;
   });
 
   const me = players[myId];

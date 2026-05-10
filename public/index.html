@@ -10,7 +10,7 @@
   <div id="overlay">
     <div id="login">
       <h2>Multiplay Game 2</h2>
-      <p class="subtitle">탑다운 · 맵 구석 <strong>코어</strong>를 지키세요. 붉은 적이 닿으면 HP가 깎입니다.</p>
+      <p class="subtitle">탑다운 · 맵 <strong>12시 방향</strong> 코어를 지키세요. 아래에서 적이 옵니다.</p>
       <div id="serverCapacityRow" class="server-capacity-row" aria-live="polite">
         <div class="server-capacity-main">
           전체 접속: <span id="serverCapacityCurrent">—</span> / <span id="serverCapacityMax">100</span>명
@@ -45,6 +45,7 @@
 
   <div id="hud" class="hidden">
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 이동</div>
+    <div id="attackClassHint" class="attack-class-hint hidden">공격 클래스: 클릭한 방향으로 총알 발사</div>
     <div id="coreHud">코어: <span id="coreHpText">—</span></div>
     <div id="playerCount"></div>
   </div>
@@ -66,7 +67,8 @@
   }
   </script>
   <script src="config.js"></script>
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- server.js 의 io({ path: '/multiplay-game2/socket.io' }) 와 동일해야 로컬 npm start 접속 시 로드됨 -->
+  <script src="/multiplay-game2/socket.io/socket.io.js"></script>
   <script type="module" src="main.js"></script>
 </body>
 </html>
