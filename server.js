@@ -41,7 +41,7 @@ async function verifyTokenWithPlatform(token) {
 }
 
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, { path: '/multiplay-game2/socket.io' });
 
 const SESSION_ID_MAX_LEN = 30;
 const MAX_PLAYERS_PER_SESSION = 4;

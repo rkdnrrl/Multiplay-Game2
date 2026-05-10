@@ -261,7 +261,7 @@ function removePlayer(id) {
   delete players[id];
 }
 
-const socket = io();
+const socket = io({ path: '/multiplay-game2/socket.io' });
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlAlpToken = urlParams.get('token');
